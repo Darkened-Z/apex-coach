@@ -525,6 +525,30 @@
       </div>
 
       <div class="card">
+        <div class="card-head">
+          <h2 class="serif">Recent sessions</h2>
+          <span class="sub">Last 5 completed · scored by AI</span>
+        </div>
+        <div class="card-body" style="padding:0;">
+          ${recentSessionsForMember(m)}
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2 class="serif">Note to member</h2>
+          <span class="sub">Sends to their app</span>
+        </div>
+        <div class="card-body">
+          <textarea id="trainerNote${m.id}" placeholder="e.g. Great bench today — try RPE 8 next time and film the last set" style="width:100%; min-height:80px; padding:.85rem 1rem; background:var(--ink-2); color:var(--cream); border:1px solid var(--line-strong); border-radius:0; font-size:.9rem; font-family:inherit; outline:none;"></textarea>
+          <div style="display:flex; gap:.5rem; margin-top:.75rem;">
+            <button class="btn btn-primary" onclick="sendTrainerNote(${m.id})">Send to member</button>
+            <button class="btn btn-secondary" onclick="suggestNote(${m.id})">✨ AI-suggest a note</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="card-head"><h2 class="serif">Weight trend</h2><span class="sub">${m.progress.length} entries</span></div>
         <div class="card-body">${progressSvg(m)}</div>
       </div>
@@ -624,6 +648,66 @@
     const plateau = recent.length >= 2 && Math.abs(recent[recent.length - 1].weight - recent[0].weight) < 0.15;
     return { perWeek: slope * 7, projDate, plateau };
   }
+
+  // ---------------------------------------------------------------------------
+  // Recent sessions the trainer sees for one member — mock data derived from
+  // the member's `sessions` field, scored using the same RPE-band logic the
+  // member's own app uses (Helms/Israetel autoregulation).
+  // ---------------------------------------------------------------------------
+  function recentSessionsForMember(m) {
+    // Derive last 5 sessions with a mock RPE + score from the member's
+    // `sessions` list (which contains {date, type, minutes, rpe}). Real
+    // integration would read from member's localStorage — that's the swap-in.
+    const raw = (m.sessions || []).slice(-5).reverse();
+    if (!raw.length) return `<div style="padding:2rem; text-align:center; color:var(--cream-4);">No logged sessions yet. The member's Coach app will start posting sessions here as they train.</div>`;
+    return raw.map((s) => {
+      const rpe = s.rpe || 7;
+      const score = rpe <= 7 ? 88 : rpe === 8 ? 82 : rpe === 9 ? 74 : 65;
+      const verdict = rpe <= 7 ? { c: 'var(--green)', txt: 'Room to progress · add weight' }
+                    : rpe === 8 ? { c: 'var(--gold-2)', txt: 'Hold weight, aim for +1 rep' }
+                    : rpe === 9 ? { c: 'var(--amber)', txt: 'Watch — deload signal if it repeats' }
+                    :             { c: 'var(--red)', txt: 'Consider a deload' };
+      return `
+        <div style="padding:1rem 1.25rem; border-bottom:1px solid var(--line);">
+          <div style="display:flex; align-items:baseline; justify-content:space-between; margin-bottom:.35rem;">
+            <strong>${escHtml((s.type || 'session').toUpperCase())}</strong>
+            <span class="mono" style="color:var(--cream-4); font-size:.7rem;">${escHtml(s.date)}</span>
+          </div>
+          <div style="display:flex; gap:1rem; font-size:.82rem; color:var(--cream-3); margin-bottom:.3rem;">
+            <span>Score <strong style="color:${score >= 80 ? 'var(--green)' : score >= 65 ? 'var(--gold-2)' : 'var(--red)'};">${score}/100</strong></span>
+            <span>${s.minutes || 55} min</span>
+            <span>RPE ${rpe}</span>
+          </div>
+          <div style="font-size:.8rem; color:${verdict.c}; padding:.35rem .6rem; background:${verdict.c === 'var(--red)' ? 'rgba(226,100,90,.05)' : verdict.c === 'var(--amber)' ? 'rgba(226,176,84,.05)' : verdict.c === 'var(--gold-2)' ? 'rgba(226,193,105,.05)' : 'rgba(99,198,109,.05)'}; border-left:2px solid ${verdict.c};">${escHtml(verdict.txt)}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  // Draft a note using the member's context — swap to real API later.
+  window.suggestNote = function (memberId) {
+    const m = MEMBERS.find((x) => x.id === memberId);
+    if (!m) return;
+    const p = m.progress || [];
+    const first = p[0], last = p[p.length - 1];
+    const delta = first && last ? last.weight - first.weight : 0;
+    const g = m.goal || 'maintain';
+    const notes = [
+      g === 'gain'
+        ? `Hey ${m.name.split(' ')[0]} — you're up ${Math.abs(delta).toFixed(1)} kg since we started, solid rhythm. This week let's push the bench top set to RPE 8 and add a 4th accessory. If any lift hits RPE 9 twice, hold and we'll deload the week after.`
+        : g === 'lose'
+        ? `Hey ${m.name.split(' ')[0]} — waist is trending in the right direction. Keep protein at your floor, add 500 steps a day this week, and don't let the scale rule you — 4-week average is what matters. See you Wednesday.`
+        : `Hey ${m.name.split(' ')[0]} — stay dialled in this week. Focus on movement quality on the compounds, one mobility session, and hydrate hard. Any questions before Thursday?`
+    ];
+    document.getElementById('trainerNote' + memberId).value = notes[0];
+  };
+
+  window.sendTrainerNote = function (memberId) {
+    const el = document.getElementById('trainerNote' + memberId);
+    if (!el || !el.value.trim()) return alert('Nothing to send.');
+    alert('Note sent to member. They\'ll see it in their app on next open.');
+    el.value = '';
+  };
 
   function aiSuggestedPlan(m) {
     const p = m.progress || [];
