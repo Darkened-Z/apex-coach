@@ -6,6 +6,26 @@
 (function () {
   'use strict';
 
+  // ---- PWA: register service worker + install prompt ----------------------
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => { navigator.serviceWorker.register('/sw.js').catch(() => {}); });
+  }
+  let _deferredInstall = null;
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    _deferredInstall = e;
+    setTimeout(() => {
+      if (!_deferredInstall || document.getElementById('installBanner') || localStorage.getItem('apexcoach_installDismissed')) return;
+      const b = document.createElement('div');
+      b.id = 'installBanner';
+      b.style.cssText = 'position:fixed; bottom:1rem; left:1rem; right:1rem; max-width:520px; margin:0 auto; padding:.85rem 1.1rem; background:linear-gradient(135deg, #141414, #1c1c1c); border:1px solid #c9a24a; z-index:80; display:flex; align-items:center; gap:.75rem; box-shadow:0 8px 32px rgba(0,0,0,.5);';
+      b.innerHTML = `<div style="font-size:1.5rem;">🏋</div><div style="flex:1; font-size:.85rem; color:#f4f1ea; line-height:1.4;"><strong>Install Apex Coach.</strong> Add it to your home screen for one-tap access.</div><button id="installBtn" style="padding:.5rem 1rem; background:#c9a24a; color:#0a0a0a; border:none; font-weight:700; letter-spacing:.05em; font-size:.7rem; text-transform:uppercase; cursor:pointer;">Install</button><button id="installDismiss" style="padding:.5rem; background:transparent; color:#a19d92; border:none; font-size:1.2rem; cursor:pointer;">×</button>`;
+      document.body.appendChild(b);
+      document.getElementById('installBtn').addEventListener('click', async () => { if (_deferredInstall) { _deferredInstall.prompt(); await _deferredInstall.userChoice; _deferredInstall = null; b.remove(); } });
+      document.getElementById('installDismiss').addEventListener('click', () => { try { localStorage.setItem('apexcoach_installDismissed', '1'); } catch (_) {}; b.remove(); });
+    }, 800);
+  });
+
   // ---- seed data (mirrors gym-demo mock-api.js trainers + members) ---------
   const TRAINERS = [
     { id: 1, code: 'TRN-0001', name: 'Bilal Ahmed',  phone: '03009991101', section: 'men',   salary: 40000, commission: 20, hire: '2026-01-10', notes: 'Powerlifting + hypertrophy', rating: 4.7 },
