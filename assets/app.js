@@ -205,6 +205,7 @@
     const tabs = [
       { key: 'dashboard', label: 'Dashboard', ico: '◈' },
       { key: 'members',   label: 'My Members', ico: '◍' },
+      { key: 'classes',   label: 'My Classes', ico: '🎟' },
       { key: 'schedule',  label: 'This Week',  ico: '◑' },
       { key: 'earnings',  label: 'Earnings',   ico: '◐' },
       { key: 'profile',   label: 'Profile',    ico: '◉' }
@@ -226,6 +227,7 @@
     const main = $('#mainContent');
     if (key === 'dashboard') { main.innerHTML = renderDashboard(); bindDashboard(); }
     else if (key === 'members') { main.innerHTML = renderMembers(); bindMembers(); }
+    else if (key === 'classes') main.innerHTML = renderTrainerClasses();
     else if (key === 'schedule') main.innerHTML = renderSchedule();
     else if (key === 'earnings') main.innerHTML = renderEarnings();
     else if (key === 'profile') main.innerHTML = renderProfile();
@@ -648,6 +650,115 @@
     const plateau = recent.length >= 2 && Math.abs(recent[recent.length - 1].weight - recent[0].weight) < 0.15;
     return { perWeek: slope * 7, projDate, plateau };
   }
+
+  // ---------------------------------------------------------------------------
+  // Trainer classes view — shows the classes this trainer runs across the
+  // week, with mock rosters (who's booked) + capacity + AI-suggested attendees.
+  // ---------------------------------------------------------------------------
+  const CLASSES = [
+    { id: 'c1', name: 'HIIT Blast',       trainer: 'Bilal Ahmed',   day: 'Mon', time: '07:00', duration: 45, intensity: 'high',     focus: 'cardio + full-body',    capacity: 15 },
+    { id: 'c2', name: 'Yoga Flow',        trainer: 'Ayesha Malik',  day: 'Mon', time: '18:30', duration: 60, intensity: 'low',      focus: 'mobility + recovery',   capacity: 12 },
+    { id: 'c3', name: 'Strength Circuit', trainer: 'Junaid Anwar',  day: 'Tue', time: '19:00', duration: 50, intensity: 'high',     focus: 'compound lifts',        capacity: 10 },
+    { id: 'c4', name: 'Zumba',            trainer: 'Ayesha Malik',  day: 'Wed', time: '18:30', duration: 45, intensity: 'moderate', focus: 'cardio + dance',        capacity: 20 },
+    { id: 'c5', name: 'Powerlifting 101', trainer: 'Junaid Anwar',  day: 'Wed', time: '19:30', duration: 60, intensity: 'high',     focus: 'S/B/D technique',       capacity: 8 },
+    { id: 'c6', name: 'Boxing Fundamentals', trainer: 'Hassan Iqbal', day: 'Thu', time: '19:00', duration: 55, intensity: 'high',   focus: 'conditioning + technique', capacity: 12 },
+    { id: 'c7', name: 'Post-Natal Pilates', trainer: 'Ayesha Malik', day: 'Fri', time: '10:00', duration: 45, intensity: 'low',     focus: 'core rehab + strength', capacity: 8 },
+    { id: 'c8', name: 'Bootcamp',         trainer: 'Bilal Ahmed',   day: 'Sat', time: '08:00', duration: 60, intensity: 'high',     focus: 'metcon + strength',     capacity: 20 },
+    { id: 'c9', name: 'Stretch + Mobility', trainer: 'Ayesha Malik', day: 'Sat', time: '17:00', duration: 40, intensity: 'low',     focus: 'range of motion',       capacity: 15 },
+    { id: 'c10', name: 'Spin Class',      trainer: 'Hassan Iqbal',  day: 'Sun', time: '09:00', duration: 45, intensity: 'high',     focus: 'cardio endurance',      capacity: 15 }
+  ];
+
+  function renderTrainerClasses() {
+    const trainer = currentTrainer();
+    if (!trainer) return '<div>No trainer session.</div>';
+    const myClasses = CLASSES.filter((c) => c.trainer === trainer.name);
+    if (!myClasses.length) {
+      return `
+        <div class="page-head">
+          <div><h1 class="serif">My classes</h1><p class="sub">You're not running any classes yet.</p></div>
+        </div>
+        <div class="card"><div class="card-body" style="text-align:center; padding:2rem; color:var(--cream-4);">Ask the owner to schedule you into a class slot.</div></div>
+      `;
+    }
+
+    // Mock roster — assign some members to each class based on section/goal match
+    const roster = {};
+    myClasses.forEach((c) => {
+      roster[c.id] = MEMBERS.filter((m) => m.status === 'active').filter((m) => {
+        if (c.name.includes('Post-Natal') && !/post/i.test(m.goalNotes || '')) return false;
+        if (c.name.includes('Yoga') || c.name.includes('Zumba') || c.name.includes('Pilates')) return m.section === 'women';
+        return true;
+      }).slice(0, Math.min(c.capacity, 6));
+    });
+
+    return `
+      <div class="page-head">
+        <div><h1 class="serif">My classes</h1><p class="sub">${myClasses.length} class${myClasses.length > 1 ? 'es' : ''} this week · rosters + AI attendance predictor</p></div>
+        <span class="demo-chip">Demo roster</span>
+      </div>
+
+      ${myClasses.map((c) => {
+        const bookedList = roster[c.id] || [];
+        const bookedCount = bookedList.length;
+        const utilization = Math.round(bookedCount / c.capacity * 100);
+        const intCol = c.intensity === 'high' ? 'var(--red)' : c.intensity === 'moderate' ? 'var(--amber)' : 'var(--green)';
+        // AI attendance predictor — mock: 80% show-up rate, minus 1 for every 6 booked (cognitive load / no-show pattern)
+        const predictedShow = Math.round(bookedCount * 0.85);
+        return `
+          <div class="card">
+            <div class="card-head">
+              <div>
+                <h2 class="serif">${escHtml(c.name)}</h2>
+                <div class="mono" style="color:var(--cream-4); margin-top:.3rem;">${escHtml(c.day)} · ${escHtml(c.time)} · ${c.duration} min · ${escHtml(c.focus)}</div>
+              </div>
+              <div style="text-align:right;">
+                <div style="font-family:'Instrument Serif'; font-size:1.5rem; color:var(--gold-2);">${bookedCount}/${c.capacity}</div>
+                <div class="mono" style="color:${intCol};">● ${escHtml(c.intensity)}</div>
+              </div>
+            </div>
+            <div class="card-body">
+              <div style="height:6px; background:var(--ink-3); overflow:hidden; margin-bottom:1rem;">
+                <div style="height:100%; width:${utilization}%; background:${utilization >= 90 ? 'var(--red)' : utilization >= 60 ? 'var(--green)' : 'var(--gold)'};"></div>
+              </div>
+              <div style="display:flex; gap:1.5rem; margin-bottom:1rem; font-size:.85rem; color:var(--cream-3);">
+                <span>Utilization: <strong>${utilization}%</strong></span>
+                <span>AI-predicted show: <strong>${predictedShow}</strong></span>
+                <span>Spots left: <strong style="color:${c.capacity - bookedCount === 0 ? 'var(--red)' : 'var(--cream)'};">${c.capacity - bookedCount}</strong></span>
+              </div>
+              ${bookedList.length ? `
+                <div class="mono" style="margin-bottom:.5rem;">Roster</div>
+                <div style="display:flex; flex-wrap:wrap; gap:.5rem;">
+                  ${bookedList.map((mem) => `
+                    <div style="display:flex; align-items:center; gap:.5rem; padding:.4rem .75rem; background:var(--ink-2); border:1px solid var(--line-strong);">
+                      <div class="av" style="width:24px; height:24px; border-radius:50%; background:var(--ink-3); color:var(--cream-2); display:flex; align-items:center; justify-content:center; font-size:.7rem; font-weight:600;">${(mem.name || '').split(/\s+/).map((p) => p[0]).slice(0, 2).join('').toUpperCase()}</div>
+                      <span style="font-size:.85rem;">${escHtml(mem.name)}</span>
+                    </div>
+                  `).join('')}
+                </div>
+              ` : `<div style="color:var(--cream-4); text-align:center; padding:1rem;">No bookings yet — the AI will start recommending this class to matching members.</div>`}
+              ${bookedList.length ? `
+                <div style="display:flex; gap:.5rem; margin-top:1rem;">
+                  <button class="btn btn-secondary" onclick="sendClassMessage('${c.id}')" style="cursor:pointer;">Message roster</button>
+                  <button class="btn btn-secondary" onclick="checkInAll('${c.id}')" style="cursor:pointer;">Mark all attended</button>
+                </div>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    `;
+  }
+
+  window.sendClassMessage = function (classId) {
+    const c = CLASSES.find((x) => x.id === classId);
+    if (!c) return;
+    const msg = prompt('Message to roster of ' + c.name + ':', `Hey — reminder that ${c.name} is on today at ${c.time}. See you there.`);
+    if (msg && msg.trim()) alert('Message drafted for the roster.\n\n"' + msg + '"\n\n(In a real deploy this posts to each attendee\'s inbox.)');
+  };
+  window.checkInAll = function (classId) {
+    const c = CLASSES.find((x) => x.id === classId);
+    if (!c) return;
+    alert('Roster of ' + c.name + ' marked attended. Attendance recorded to each member\'s profile.');
+  };
 
   // ---------------------------------------------------------------------------
   // Recent sessions the trainer sees for one member — mock data derived from
