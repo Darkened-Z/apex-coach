@@ -717,17 +717,64 @@
   function bindChrome() {
     $('#hambBtn').addEventListener('click', openDrawer);
     $('#drawerBackdrop').addEventListener('click', closeDrawer);
-    ['#logoutBtn', '#logoutBtn2'].forEach((s) => $(s).addEventListener('click', (e) => {
-      e.preventDefault();
-      clearSession();
-      $('#appView').classList.add('hide');
-      $('#loginView').classList.remove('hide');
+  }
+
+  // ---- trainer switcher (replaces login for demo — one click to try
+  // any trainer without going through the login screen) ---------------------
+  function showTrainerSwitcher() {
+    const html = `
+      <div class="log-overlay" id="switcherOverlay">
+        <div class="log-modal">
+          <div class="log-head"><h3 class="serif">Switch trainer</h3><button class="log-close" id="swClose">&times;</button></div>
+          <div class="log-body">
+            <p style="color:var(--cream-3); font-size:.9rem; margin:0 0 1rem;">Pick any trainer to see the portal from their view.</p>
+            <div style="display:flex; flex-direction:column; gap:.5rem;">
+              ${TRAINERS.map((t) => `
+                <button class="switcher-row" data-tid="${t.id}" style="display:flex; align-items:center; gap:.8rem; padding:.75rem 1rem; background:${state.session && state.session.id === t.id ? 'var(--ink-3)' : 'transparent'}; border:1px solid var(--line-strong); color:var(--cream); text-align:left; cursor:pointer;">
+                  <div class="avatar">${initials(t.name)}</div>
+                  <div style="flex:1;">
+                    <b style="display:block;">${escHtml(t.name)}</b>
+                    <small style="color:var(--cream-4);">${escHtml(t.code)} · ${t.section === 'both' ? 'All sections' : t.section + ' section'}</small>
+                  </div>
+                  ${state.session && state.session.id === t.id ? '<span class="pill green">current</span>' : ''}
+                </button>`).join('')}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', html);
+    $('#swClose').addEventListener('click', closeSwitcher);
+    document.querySelectorAll('.switcher-row').forEach((b) => b.addEventListener('click', () => {
+      state.session = { id: parseInt(b.getAttribute('data-tid'), 10) };
+      saveSession();
+      closeSwitcher();
+      enterApp();
     }));
   }
+  function closeSwitcher() { const o = $('#switcherOverlay'); if (o) o.remove(); }
 
   // ---- boot ---------------------------------------------------------------
   loadSession();
-  initLogin();
   bindChrome();
-  if (state.session && currentTrainer()) enterApp();
+  // Login step is turned off for the demo — auto-enter as the richest profile
+  // (Junaid Anwar, head trainer). Users can switch via the sidebar avatar.
+  if (!state.session || !currentTrainer()) {
+    state.session = { id: 4 };
+    saveSession();
+  }
+  enterApp();
+
+  // Make the sidebar avatar row + drawer avatar row open the switcher.
+  document.querySelectorAll('.side-foot .avatar, .side-foot .who').forEach((el) => {
+    el.style.cursor = 'pointer';
+    el.title = 'Switch trainer';
+    el.addEventListener('click', showTrainerSwitcher);
+  });
+  // Sign-out link now opens the switcher too.
+  document.querySelectorAll('#logoutBtn, #logoutBtn2').forEach((el) => {
+    el.textContent = 'Switch';
+    el.removeEventListener?.('click', () => {});
+    el.addEventListener('click', (e) => { e.preventDefault(); showTrainerSwitcher(); });
+  });
 })();
