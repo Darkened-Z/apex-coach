@@ -556,6 +556,21 @@
         </div>
       </div>
 
+      <div class="card" style="border-color:rgba(122,182,226,.35);">
+        <div class="card-head">
+          <h2 class="serif">📋 Custom program builder</h2>
+          <span class="sub">Design a 4-week program · AI drafts first pass</span>
+        </div>
+        <div class="card-body">
+          <div id="programState${m.id}" style="min-height:60px; color:var(--cream-4); font-size:.88rem;">${loadProgramSummary(m)}</div>
+          <div style="display:flex; gap:.5rem; margin-top:.75rem; flex-wrap:wrap;">
+            <button class="btn btn-primary" onclick="openProgramBuilder(${m.id})">${hasProgram(m) ? 'Edit program' : '✨ Design a program'}</button>
+            ${hasProgram(m) ? `<button class="btn btn-secondary" onclick="regenerateProgram(${m.id})">↻ Regenerate</button>` : ''}
+            ${hasProgram(m) ? `<button class="btn btn-secondary" onclick="deleteProgram(${m.id})">Delete</button>` : ''}
+          </div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-head">
           <h2 class="serif">Note to member</h2>
@@ -670,6 +685,259 @@
     const plateau = recent.length >= 2 && Math.abs(recent[recent.length - 1].weight - recent[0].weight) < 0.15;
     return { perWeek: slope * 7, projDate, plateau };
   }
+
+  // ---------------------------------------------------------------------------
+  // Custom program builder — trainer designs a 4-week program for a specific
+  // member. AI drafts a first pass from the member's goal, saved in
+  // localStorage keyed on member id. Trainer can edit any exercise inline.
+  // ---------------------------------------------------------------------------
+  const PROGRAMS_LS = 'apexcoach_programs';
+  function loadPrograms() { try { return JSON.parse(localStorage.getItem(PROGRAMS_LS)) || {}; } catch (_) { return {}; } }
+  function savePrograms(p) { try { localStorage.setItem(PROGRAMS_LS, JSON.stringify(p)); } catch (_) {} }
+  function hasProgram(m) { return !!(loadPrograms()[String(m.id)]); }
+  function getProgram(m) { return loadPrograms()[String(m.id)]; }
+
+  function loadProgramSummary(m) {
+    const p = getProgram(m);
+    if (!p) return `<em style="color:var(--cream-4);">No custom program assigned yet. AI can draft a 4-week program from ${escHtml(m.name.split(' ')[0])}'s goal.</em>`;
+    return `<strong>${escHtml(p.title)}</strong> · ${p.weeks.length} weeks · ${p.weeks.reduce((s, w) => s + w.sessions.length, 0)} sessions · created ${escHtml(p.createdAt)}`;
+  }
+
+  function generateProgramDraft(m) {
+    const goal = m.goal || 'maintain';
+    const isFemale = m.section === 'women';
+    const isPostNatal = /post.?natal|post.?partum/i.test(m.goalNotes || '');
+    const templates = {
+      gain: {
+        title: '4-week hypertrophy · ' + m.name.split(' ')[0],
+        note: 'Push volume weeks 1-3, deload week 4. Progressive overload rule: RPE ≤ 7 → add 2.5 kg or +1 rep next session.',
+        splits: [
+          { name: 'Push · Chest / Shoulders / Triceps', moves: [
+            { name: 'Barbell Bench Press', sets: 5, reps: '3-5', rpe: 8, notes: 'Top set' },
+            { name: 'Overhead Press', sets: 4, reps: '6', rpe: 8, notes: '' },
+            { name: 'Incline DB Press', sets: 3, reps: '10', rpe: 8, notes: '' },
+            { name: 'Cable Fly', sets: 3, reps: '12', rpe: 8, notes: 'Peak contraction' },
+            { name: 'Tricep Rope Pushdown', sets: 3, reps: '12-15', rpe: 8, notes: '' }
+          ]},
+          { name: 'Pull · Back / Biceps', moves: [
+            { name: 'Weighted Pull-up', sets: 4, reps: '5-8', rpe: 8, notes: '' },
+            { name: 'Barbell Row', sets: 4, reps: '6-8', rpe: 8, notes: '' },
+            { name: 'Chest-supported Row', sets: 3, reps: '10', rpe: 8, notes: '' },
+            { name: 'Face Pull', sets: 3, reps: '15', rpe: 7, notes: 'Rear delt work' },
+            { name: 'Barbell Curl', sets: 3, reps: '10-12', rpe: 8, notes: '' }
+          ]},
+          { name: 'Legs · Quad-dominant', moves: [
+            { name: 'Back Squat', sets: 5, reps: '3-5', rpe: 8, notes: 'Focus on depth' },
+            { name: 'Bulgarian Split Squat', sets: 3, reps: '8/side', rpe: 8, notes: '' },
+            { name: 'Leg Press', sets: 3, reps: '12', rpe: 8, notes: '' },
+            { name: 'Leg Extension', sets: 3, reps: '15', rpe: 8, notes: '' },
+            { name: 'Standing Calf Raise', sets: 4, reps: '12', rpe: 8, notes: '' }
+          ]},
+          { name: 'Upper · Hypertrophy volume', moves: [
+            { name: 'Incline DB Press', sets: 4, reps: '8-10', rpe: 8, notes: '' },
+            { name: 'Chest-supported Row', sets: 4, reps: '10', rpe: 8, notes: '' },
+            { name: 'DB Shoulder Press', sets: 3, reps: '10', rpe: 8, notes: '' },
+            { name: 'Lateral Raise', sets: 3, reps: '15', rpe: 8, notes: 'Strict form' },
+            { name: 'Hammer Curl', sets: 3, reps: '12', rpe: 8, notes: '' }
+          ]},
+          { name: 'Legs · Hip-dominant', moves: [
+            { name: 'Deadlift', sets: 4, reps: '3-5', rpe: 8, notes: 'Reset each rep' },
+            { name: 'Romanian Deadlift', sets: 3, reps: '8', rpe: 8, notes: '' },
+            { name: 'Barbell Hip Thrust', sets: 3, reps: '10', rpe: 8, notes: '' },
+            { name: 'Lying Leg Curl', sets: 3, reps: '12', rpe: 8, notes: '' },
+            { name: 'Seated Calf Raise', sets: 4, reps: '15', rpe: 8, notes: '' }
+          ]}
+        ]
+      },
+      lose: {
+        title: '4-week fat-loss + muscle preservation · ' + m.name.split(' ')[0],
+        note: 'Compound-heavy strength work + 2 cardio sessions. Protein floor is non-negotiable. Deload week 4.',
+        splits: [
+          { name: 'Full-body A · Strength', moves: [
+            { name: isPostNatal ? 'Goblet Squat' : 'Back Squat', sets: 4, reps: '5-8', rpe: 7, notes: '' },
+            { name: 'DB Bench Press', sets: 3, reps: '8-10', rpe: 7, notes: '' },
+            { name: 'Chest-supported Row', sets: 3, reps: '10', rpe: 7, notes: '' },
+            { name: 'Romanian Deadlift', sets: 3, reps: '10', rpe: 7, notes: '' },
+            { name: isPostNatal ? 'Dead Bug' : 'Plank', sets: 3, reps: '45s', rpe: 7, notes: '' }
+          ]},
+          { name: 'Cardio · Zone 2', moves: [
+            { name: 'Treadmill Incline Walk', sets: 1, reps: '45 min', rpe: 5, notes: 'Incline 8%' },
+            { name: 'Mobility flow', sets: 1, reps: '10 min', rpe: 3, notes: 'Post-cardio' }
+          ]},
+          { name: 'Lower · Glute-focus', moves: [
+            { name: 'Barbell Hip Thrust', sets: 4, reps: '8-10', rpe: 8, notes: '' },
+            { name: 'Bulgarian Split Squat', sets: 3, reps: '10/side', rpe: 8, notes: '' },
+            { name: 'Romanian Deadlift', sets: 3, reps: '10', rpe: 7, notes: '' },
+            { name: 'Cable Kickback', sets: 3, reps: '12/side', rpe: 8, notes: '' },
+            { name: 'Walking Lunge', sets: 3, reps: '20 total', rpe: 8, notes: '' }
+          ]},
+          { name: 'HIIT + core', moves: [
+            { name: 'Assault Bike Intervals', sets: 10, reps: '30s work / 30s rest', rpe: 9, notes: '' },
+            { name: 'Battle Ropes', sets: 3, reps: '30s', rpe: 8, notes: '' },
+            { name: isPostNatal ? 'Bird-dog' : 'Hanging Knee Raise', sets: 3, reps: '10', rpe: 7, notes: '' }
+          ]}
+        ]
+      },
+      maintain: {
+        title: '4-week maintenance · ' + m.name.split(' ')[0],
+        note: 'Sustainable rhythm. Strength + hypertrophy + one cardio day. Auto-regulate to feel.',
+        splits: [
+          { name: 'Full-body A', moves: [
+            { name: 'Back Squat', sets: 3, reps: '8', rpe: 7, notes: '' },
+            { name: 'Bench Press', sets: 3, reps: '8', rpe: 7, notes: '' },
+            { name: 'Bent Row', sets: 3, reps: '8', rpe: 7, notes: '' },
+            { name: 'Overhead Press', sets: 3, reps: '8', rpe: 7, notes: '' },
+            { name: 'Plank', sets: 3, reps: '45s', rpe: 7, notes: '' }
+          ]},
+          { name: 'Full-body B', moves: [
+            { name: 'Deadlift', sets: 3, reps: '5', rpe: 7, notes: '' },
+            { name: 'Incline DB Press', sets: 3, reps: '10', rpe: 7, notes: '' },
+            { name: 'Pull-up', sets: 3, reps: 'AMRAP', rpe: 7, notes: '' },
+            { name: 'Walking Lunge', sets: 3, reps: '12/side', rpe: 7, notes: '' },
+            { name: 'Ab Wheel', sets: 3, reps: '10', rpe: 7, notes: '' }
+          ]},
+          { name: 'Cardio + core', moves: [
+            { name: 'Zone 2 cardio', sets: 1, reps: '30 min', rpe: 5, notes: '' },
+            { name: 'Hanging Leg Raise', sets: 3, reps: '10', rpe: 7, notes: '' },
+            { name: 'Dead Bug', sets: 3, reps: '10/side', rpe: 6, notes: '' }
+          ]}
+        ]
+      }
+    };
+
+    const t = templates[goal] || templates.maintain;
+    // Build 4 weeks — week 1 baseline, weeks 2-3 progressive overload cues, week 4 deload
+    const weeks = [];
+    for (let w = 1; w <= 4; w++) {
+      const isDeload = w === 4;
+      const sessions = t.splits.map((split) => ({
+        name: split.name + (isDeload ? ' (deload)' : ''),
+        moves: split.moves.map((mv) => ({
+          ...mv,
+          notes: isDeload ? 'Deload: 60% volume, hold weight' : w === 1 ? mv.notes : mv.notes + (w === 2 ? ' +5 kg / +1 rep vs wk1' : w === 3 ? ' +5 kg / +1 rep vs wk2' : '')
+        }))
+      }));
+      weeks.push({ week: w, isDeload, sessions });
+    }
+    return {
+      title: t.title,
+      note: t.note,
+      createdAt: '2026-06-29',
+      weeks
+    };
+  }
+
+  window.openProgramBuilder = function (memberId) {
+    const m = MEMBERS.find((x) => x.id === memberId);
+    if (!m) return;
+    let prog = getProgram(m);
+    if (!prog) prog = generateProgramDraft(m);
+    renderProgramBuilderModal(m, prog);
+  };
+  window.regenerateProgram = function (memberId) {
+    if (!confirm('Overwrite the current program with a fresh AI draft?')) return;
+    const m = MEMBERS.find((x) => x.id === memberId);
+    if (!m) return;
+    const fresh = generateProgramDraft(m);
+    const p = loadPrograms(); p[String(m.id)] = fresh; savePrograms(p);
+    openMember(memberId);
+  };
+  window.deleteProgram = function (memberId) {
+    if (!confirm('Delete this member\'s custom program?')) return;
+    const p = loadPrograms(); delete p[String(memberId)]; savePrograms(p);
+    openMember(memberId);
+  };
+
+  function renderProgramBuilderModal(m, prog) {
+    const html = `
+      <div class="log-overlay" id="progOv">
+        <div class="log-modal" style="max-width:820px; max-height:calc(100dvh - 2rem); overflow-y:auto;">
+          <div class="log-head" style="position:sticky; top:0; background:var(--ink-2); z-index:5;">
+            <h3 class="serif">${escHtml(prog.title)}</h3>
+            <button class="log-close" id="progClose">&times;</button>
+          </div>
+          <div class="log-body">
+            <p style="color:var(--cream-2); margin:0 0 1.25rem; padding:.85rem 1rem; background:rgba(122,182,226,.06); border-left:2px solid #7ab6e2; font-size:.9rem; line-height:1.6;">
+              <span style="color:#7ab6e2; font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; display:block; margin-bottom:.35rem;">AI-drafted rationale</span>
+              ${escHtml(prog.note)}
+            </p>
+            <div style="display:flex; gap:.4rem; margin-bottom:1.25rem; overflow-x:auto;">
+              ${prog.weeks.map((w) => `<button class="chip" data-week="${w.week}" style="padding:.55rem 1rem; background:${w.week === 1 ? 'var(--gold-2)' : 'transparent'}; color:${w.week === 1 ? 'var(--ink)' : 'var(--cream-3)'}; border:1px solid ${w.week === 1 ? 'var(--gold-2)' : 'var(--line-strong)'}; border-radius:99px; font-size:.75rem; letter-spacing:.05em; text-transform:uppercase; cursor:pointer; white-space:nowrap;">Week ${w.week}${w.isDeload ? ' · Deload' : ''}</button>`).join('')}
+            </div>
+            <div id="weekContent"></div>
+            <div style="display:flex; gap:.75rem; margin-top:1.5rem; padding-top:1.25rem; border-top:1px solid var(--line);">
+              <button class="chip" onclick="closeProgram()" style="cursor:pointer;">Cancel</button>
+              <button class="cta" style="flex:1; padding:.9rem 1.5rem; background:var(--cream); color:var(--ink); border:none; font-weight:700; letter-spacing:.05em; font-size:.85rem; text-transform:uppercase; cursor:pointer;" onclick="saveProgram(${m.id})">Save + assign to ${escHtml(m.name.split(' ')[0])}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.insertAdjacentHTML('beforeend', html);
+    document.getElementById('progClose').addEventListener('click', closeProgram);
+    // Save reference to editable prog on window for save handler
+    window.__prog = JSON.parse(JSON.stringify(prog));
+    renderWeek(1);
+    document.querySelectorAll('[data-week]').forEach((b) => b.addEventListener('click', () => {
+      const w = parseInt(b.getAttribute('data-week'), 10);
+      document.querySelectorAll('[data-week]').forEach((x) => {
+        const isSel = parseInt(x.getAttribute('data-week'), 10) === w;
+        x.style.background = isSel ? 'var(--gold-2)' : 'transparent';
+        x.style.color = isSel ? 'var(--ink)' : 'var(--cream-3)';
+        x.style.borderColor = isSel ? 'var(--gold-2)' : 'var(--line-strong)';
+      });
+      renderWeek(w);
+    }));
+  }
+
+  function renderWeek(weekNum) {
+    const prog = window.__prog;
+    const w = prog.weeks.find((x) => x.week === weekNum);
+    if (!w) return;
+    const html = `
+      ${w.isDeload ? '<div style="padding:.75rem 1rem; margin-bottom:1rem; background:rgba(226,176,84,.08); border-left:2px solid var(--amber); font-size:.9rem; color:var(--cream-2);">📉 Deload week — 60% volume, 100% intensity. Recovery over accumulation.</div>' : ''}
+      ${w.sessions.map((s, si) => `
+        <div style="margin-bottom:1.25rem; border-left:2px solid var(--gold); padding:0 0 0 1rem;">
+          <div style="font-family:'Instrument Serif'; font-size:1.15rem; margin-bottom:.5rem;">Day ${si + 1} · ${escHtml(s.name)}</div>
+          <table style="width:100%; font-size:.85rem; margin-bottom:.5rem;">
+            <thead><tr>
+              ${['Exercise','Sets','Reps','RPE','Notes'].map((h) => `<th style="text-align:left; color:var(--cream-4); font-size:.65rem; letter-spacing:.1em; text-transform:uppercase; padding-bottom:.35rem;">${h}</th>`).join('')}
+            </tr></thead>
+            <tbody>${s.moves.map((mv, mi) => `
+              <tr>
+                <td style="padding:.15rem;"><input type="text" value="${escHtml(mv.name)}" data-week="${weekNum}" data-session="${si}" data-move="${mi}" data-field="name" style="width:100%; padding:.35rem .5rem; background:var(--ink); color:var(--cream); border:1px solid var(--line-strong); font-size:.85rem;"></td>
+                <td style="padding:.15rem;"><input type="text" value="${escHtml(mv.sets)}" data-week="${weekNum}" data-session="${si}" data-move="${mi}" data-field="sets" style="width:60px; padding:.35rem .5rem; background:var(--ink); color:var(--cream); border:1px solid var(--line-strong); font-size:.85rem;"></td>
+                <td style="padding:.15rem;"><input type="text" value="${escHtml(mv.reps)}" data-week="${weekNum}" data-session="${si}" data-move="${mi}" data-field="reps" style="width:80px; padding:.35rem .5rem; background:var(--ink); color:var(--cream); border:1px solid var(--line-strong); font-size:.85rem;"></td>
+                <td style="padding:.15rem;"><input type="text" value="${escHtml(mv.rpe)}" data-week="${weekNum}" data-session="${si}" data-move="${mi}" data-field="rpe" style="width:60px; padding:.35rem .5rem; background:var(--ink); color:var(--cream); border:1px solid var(--line-strong); font-size:.85rem;"></td>
+                <td style="padding:.15rem;"><input type="text" value="${escHtml(mv.notes)}" data-week="${weekNum}" data-session="${si}" data-move="${mi}" data-field="notes" style="width:100%; padding:.35rem .5rem; background:var(--ink); color:var(--cream); border:1px solid var(--line-strong); font-size:.85rem;"></td>
+              </tr>`).join('')}</tbody>
+          </table>
+        </div>
+      `).join('')}
+    `;
+    document.getElementById('weekContent').innerHTML = html;
+    // Wire inputs
+    document.querySelectorAll('#weekContent input[data-week]').forEach((inp) => {
+      inp.addEventListener('input', () => {
+        const w = parseInt(inp.getAttribute('data-week'), 10);
+        const si = parseInt(inp.getAttribute('data-session'), 10);
+        const mi = parseInt(inp.getAttribute('data-move'), 10);
+        const field = inp.getAttribute('data-field');
+        const week = window.__prog.weeks.find((x) => x.week === w);
+        if (week) week.sessions[si].moves[mi][field] = inp.value;
+      });
+    });
+  }
+
+  window.closeProgram = function () { const o = document.getElementById('progOv'); if (o) o.remove(); };
+  window.saveProgram = function (memberId) {
+    const p = loadPrograms();
+    p[String(memberId)] = window.__prog;
+    savePrograms(p);
+    closeProgram();
+    alert('Program saved. ' + MEMBERS.find((x) => x.id === memberId).name.split(' ')[0] + ' will see it in their app.');
+    openMember(memberId);
+  };
 
   // ---------------------------------------------------------------------------
   // Trainer classes view — shows the classes this trainer runs across the
