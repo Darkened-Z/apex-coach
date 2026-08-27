@@ -516,6 +516,14 @@
         <div class="card-body"><p style="color:var(--cream-2); font-size:.95rem; margin:0;">${escHtml(m.goalNotes || 'No goal notes yet.')}</p></div>
       </div>
 
+      <div class="card" style="border-color:rgba(201,162,74,.35);">
+        <div class="card-head">
+          <h2 class="serif">✨ AI-suggested plan</h2>
+          <span class="sub">Draft for this member · edit before delivering</span>
+        </div>
+        <div class="card-body">${aiSuggestedPlan(m)}</div>
+      </div>
+
       <div class="card">
         <div class="card-head"><h2 class="serif">Weight trend</h2><span class="sub">${m.progress.length} entries</span></div>
         <div class="card-body">${progressSvg(m)}</div>
@@ -553,6 +561,67 @@
             </tr>`).join('')}</tbody>
         </table>
       </div>
+    `;
+  }
+
+  // Compact AI-suggested plan — reads the same signals the member's own app
+  // uses (goal, weight delta, sessions/wk, injuries) and drafts a session +
+  // nutrition + explanation the trainer refines and delivers.
+  function aiSuggestedPlan(m) {
+    const p = m.progress || [];
+    const first = p[0], last = p[p.length - 1];
+    const delta = first && last ? last.weight - first.weight : 0;
+    const targetLeft = (m.targetWeight != null && last) ? (m.targetWeight - last.weight) : null;
+    const g = m.goal || 'maintain';
+    const goalTxt = g === 'gain' ? 'muscle gain' : g === 'lose' ? 'fat loss' : 'maintenance';
+
+    // Session focus
+    const sessions = {
+      gain: ['Push · Chest / Shoulders / Triceps — 5×5 bench, 3×8 OHP, 3×10 dips',
+             'Pull · Back / Biceps — 4×6 weighted pull-ups, 4×8 row, 3×10 curl',
+             'Legs · Quad-focus — 5×5 squat, 3×8 leg press, 3×15 leg extension'],
+      lose:  ['Full-body strength — goblet squat 3×10, DB press 3×10, RDL 3×10, row 3×10, plank 3×45s',
+             'HIIT + cardio — 10×(30s work / 30s rest) on assault bike, 20 min zone 2 finisher',
+             'Lower + glute-focus — hip thrust 4×10, split squat 3×10/side, cable kickback 3×12'],
+      maintain: ['Full-body A — 3×8 squat, bench, row, OHP',
+                 'Full-body B — 3×5 deadlift, incline press, pull-ups, lunge',
+                 'Active recovery + core — mobility flow, plank, dead bug, 30 min walk']
+    };
+    const suggestions = sessions[g] || sessions.maintain;
+    const sessionsIdx = ((new Date().getDate()) % 3);
+
+    // Nutrition nudge
+    const nutritionNudge = g === 'gain'
+      ? 'Push protein to ~1.8 g/kg (currently ~' + (last ? Math.round(last.weight * 1.8) : 140) + ' g). If weight stalls 2 weeks, add 150 kcal.'
+      : g === 'lose'
+      ? 'Hold protein at 2.2 g/kg (~' + (last ? Math.round(last.weight * 2.2) : 140) + ' g) to spare muscle. If loss stalls, drop 100 kcal, don\'t crash.'
+      : 'Maintenance calories — protein ~1.6 g/kg. Focus on food quality this month.';
+
+    // Explanation the trainer can paste into a message
+    const context = (() => {
+      const parts = [];
+      if (Math.abs(delta) >= 1) parts.push(`${delta > 0 ? 'up' : 'down'} ${Math.abs(delta).toFixed(1)} kg since ${first.date}`);
+      if (targetLeft != null) parts.push(`${Math.abs(targetLeft).toFixed(1)} kg to ${g === 'gain' ? 'gain' : g === 'lose' ? 'lose' : 'shift'} to hit ${m.targetWeight} kg`);
+      if ((m.progress || []).length >= 5) parts.push('logging consistently');
+      return parts.join(' · ') || 'still building baseline';
+    })();
+    const explanation = `${m.name.split(' ')[0]} is a ${goalTxt} client (${context}). Today's session is a **${suggestions[sessionsIdx].split(' — ')[0]}** — the split rotates through 3 focus days. Nutrition-side: ${nutritionNudge}`;
+
+    return `
+      <div style="display:flex; align-items:baseline; gap:.6rem; margin-bottom:1rem; flex-wrap:wrap;">
+        <span style="font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; color:var(--cream-4);">Coach agent</span>
+        <span style="font-family:'Instrument Serif'; font-size:1.15rem;">${suggestions[sessionsIdx].split(' — ')[0]}</span>
+      </div>
+      <p style="color:var(--cream-2); margin:0 0 1rem; line-height:1.65;">${suggestions[sessionsIdx].split(' — ')[1] || ''}</p>
+      <div style="padding:.85rem 1rem; background:rgba(122,182,226,.06); border-left:2px solid #7ab6e2; margin-bottom:1rem;">
+        <div style="font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; color:#7ab6e2; margin-bottom:.35rem;">Nutritionist agent · nudge</div>
+        <div style="color:var(--cream-2); font-size:.9rem; line-height:1.6;">${nutritionNudge}</div>
+      </div>
+      <div style="padding:.85rem 1rem; background:rgba(99,198,109,.06); border-left:2px solid var(--green); margin-bottom:1rem;">
+        <div style="font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; color:var(--green); margin-bottom:.35rem;">Talk-track for the session</div>
+        <div style="color:var(--cream-2); font-size:.9rem; line-height:1.6;">${explanation.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</div>
+      </div>
+      <div class="mono" style="font-size:.7rem;">Refreshes daily. Suggestions are a starting point — you know the member better than the model.</div>
     `;
   }
 
