@@ -186,9 +186,12 @@
 
   // ---- app router ---------------------------------------------------------
   function enterApp() {
-    $('#loginView').classList.add('hide');
+    const loginView = $('#loginView');
+    if (loginView) loginView.classList.add('hide');
     $('#appView').classList.remove('hide');
     const t = currentTrainer();
+    if (!t) return; // guard: no valid trainer session, don't try to paint
+
     $('#sideAv').textContent = initials(t.name);
     $('#sideName').textContent = t.name;
     $('#sideRole').textContent = t.section === 'both' ? 'All sections' : (t.section === 'men' ? 'Men section' : 'Women section');
