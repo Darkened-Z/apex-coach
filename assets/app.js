@@ -564,9 +564,67 @@
     `;
   }
 
-  // Compact AI-suggested plan — reads the same signals the member's own app
-  // uses (goal, weight delta, sessions/wk, injuries) and drafts a session +
-  // nutrition + explanation the trainer refines and delivers.
+  // ---------------------------------------------------------------------------
+  // AI-suggested plan — same evidence-informed logic as the member portal
+  // (apex-fit.pos.goxx.app), scoped to what the trainer can act on today.
+  //
+  // Sources cited inline where math is applied:
+  //   Mifflin–St Jeor / Katch–McArdle · Helms 2014 (protein) · Israetel (fat)
+  //   RP volume landmarks (MEV/MAV/MRV) · Aragon & Schoenfeld (meal timing)
+  //   US Navy circumference method (body-fat estimate)
+  //   Linear regression on rolling 4-week weight for projection
+  // ---------------------------------------------------------------------------
+
+  // Body-fat via US Navy method (waist + height + gender via section).
+  function _navyBF(m, entry) {
+    if (!m.height || !entry || !entry.waist) return null;
+    const female = m.section === 'women';
+    const neck = female ? m.height * 0.207 : m.height * 0.216;
+    if (female) {
+      const hip = entry.thighs ? entry.thighs * 1.55 : entry.waist * 1.15;
+      const v = 495 / (1.29579 - 0.35004 * Math.log10(entry.waist + hip - neck) + 0.22100 * Math.log10(m.height)) - 450;
+      return Math.max(8, Math.min(55, v));
+    }
+    if (entry.waist <= neck) return null;
+    const v = 495 / (1.0324 - 0.19077 * Math.log10(entry.waist - neck) + 0.15456 * Math.log10(m.height)) - 450;
+    return Math.max(4, Math.min(45, v));
+  }
+
+  // Linear regression on rolling 4-week weights → slope + projected target date.
+  function _projection(m) {
+    const p = (m.progress || []).slice();
+    if (p.length < 2 || m.targetWeight == null) return { perWeek: 0, projDate: null, plateau: false };
+    const t0 = new Date(p[0].date).getTime();
+    const days = p.map(r => (new Date(r.date).getTime() - t0) / 86400000);
+    const weights = p.map(r => r.weight);
+    // 4-week rolling average smooths the noise
+    const roll = weights.map((_, i) => {
+      const slice = weights.slice(Math.max(0, i - 3), i + 1);
+      return slice.reduce((a, b) => a + b, 0) / slice.length;
+    });
+    const n = days.length;
+    const sx = days.reduce((a, b) => a + b, 0);
+    const sy = roll.reduce((a, b) => a + b, 0);
+    const sxx = days.reduce((a, b) => a + b * b, 0);
+    const sxy = days.reduce((a, b, i) => a + b * roll[i], 0);
+    const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);
+    const intercept = (sy - slope * sx) / n;
+    let projDate = null;
+    if (Math.abs(slope) > 1e-5) {
+      const daysToTarget = (m.targetWeight - intercept) / slope - days[days.length - 1];
+      if (daysToTarget > 0 && daysToTarget < 730) {
+        const d = new Date('2026-06-29');
+        d.setDate(d.getDate() + Math.round(daysToTarget));
+        projDate = d.toISOString().slice(0, 10);
+      }
+    }
+    // Plateau: <0.15 kg change over last 14 days
+    const cutoff = new Date(new Date('2026-06-29').getTime() - 14 * 86400000).toISOString().slice(0, 10);
+    const recent = p.filter(r => r.date >= cutoff);
+    const plateau = recent.length >= 2 && Math.abs(recent[recent.length - 1].weight - recent[0].weight) < 0.15;
+    return { perWeek: slope * 7, projDate, plateau };
+  }
+
   function aiSuggestedPlan(m) {
     const p = m.progress || [];
     const first = p[0], last = p[p.length - 1];
@@ -575,48 +633,114 @@
     const g = m.goal || 'maintain';
     const goalTxt = g === 'gain' ? 'muscle gain' : g === 'lose' ? 'fat loss' : 'maintenance';
 
-    // Session focus
-    const sessions = {
-      gain: ['Push · Chest / Shoulders / Triceps — 5×5 bench, 3×8 OHP, 3×10 dips',
-             'Pull · Back / Biceps — 4×6 weighted pull-ups, 4×8 row, 3×10 curl',
-             'Legs · Quad-focus — 5×5 squat, 3×8 leg press, 3×15 leg extension'],
-      lose:  ['Full-body strength — goblet squat 3×10, DB press 3×10, RDL 3×10, row 3×10, plank 3×45s',
-             'HIIT + cardio — 10×(30s work / 30s rest) on assault bike, 20 min zone 2 finisher',
-             'Lower + glute-focus — hip thrust 4×10, split squat 3×10/side, cable kickback 3×12'],
-      maintain: ['Full-body A — 3×8 squat, bench, row, OHP',
-                 'Full-body B — 3×5 deadlift, incline press, pull-ups, lunge',
-                 'Active recovery + core — mobility flow, plank, dead bug, 30 min walk']
+    // Rich stats
+    const proj = _projection(m);
+    const bf = last ? _navyBF(m, last) : null;
+    const lbm = bf != null && last ? last.weight * (1 - bf / 100) : null;
+    const pctPerWeek = last && proj.perWeek ? Math.abs(proj.perWeek) / last.weight * 100 : 0;
+    const paceFast = (g === 'lose' && pctPerWeek > 1.0) || (g === 'gain' && pctPerWeek > 0.5);
+    const paceSlow = (g === 'lose' && pctPerWeek < 0.2 && Math.abs(delta) > 0) || (g === 'gain' && pctPerWeek < 0.1 && Math.abs(delta) > 0);
+
+    // Injury detection from goalNotes (post-natal, knee, etc.)
+    const notes = (m.goalNotes || '').toLowerCase();
+    const injuries = [];
+    if (/post.?natal|post.?partum/.test(notes)) injuries.push('post-partum core recovery');
+    if (/knee/.test(notes)) injuries.push('knee');
+    if (/(low ?back|lumbar)/.test(notes)) injuries.push('low back');
+    if (/shoulder/.test(notes)) injuries.push('shoulder');
+
+    // Session focus — RPE-based prescription now
+    const sessionBank = {
+      gain: [
+        { title: 'Push · Chest / Shoulders / Triceps', focus: 'compound push at RPE 8, accessories RPE 8', moves: 'Bench 5×3 @ RPE 8 · OHP 4×6 · Incline DB 3×10 · Lateral raise 3×15 · Tri pushdown 3×12' },
+        { title: 'Pull · Back / Biceps', focus: 'horizontal + vertical pull', moves: 'Weighted pull-up 5×5 · Barbell row 4×6 · Chest-supp row 3×10 · Face pull 3×15 · Curl 3×12' },
+        { title: 'Legs · Quad-dominant', focus: 'squat pattern strength', moves: 'Back squat 5×3 @ RPE 8 · Bulgarian split squat 3×8/side · Leg press 3×12 · Leg extension 3×15 · Calf 4×12' }
+      ],
+      lose: [
+        { title: 'Full-body A · Strength preserve', focus: 'compound lifts to hold LBM in a deficit', moves: 'Goblet squat 3×10 @ RPE 8 · DB bench 3×10 · Chest-supp row 3×10 · RDL 3×10 · Plank 3×45s' },
+        { title: 'HIIT + core', focus: 'metabolic finisher', moves: 'Assault bike 10×(30/30) · Plank 3×45s · Hanging knee raise 3×10 · Pallof press 3×10/side' },
+        { title: 'Lower · Glute-focus', focus: 'hip-dominant burn', moves: 'Hip thrust 4×8 @ RPE 8 · Bulgarian split squat 3×10/side · RDL 3×10 · Cable kickback 3×12/side · Calf 4×15' }
+      ],
+      maintain: [
+        { title: 'Full-body A', focus: 'strength base', moves: 'Squat 3×5 @ RPE 7 · Bench 3×5 · Bent row 3×8 · OHP 3×8 · Plank 3×45s' },
+        { title: 'Full-body B', focus: 'hypertrophy', moves: 'Deadlift 3×5 @ RPE 7 · Incline DB 3×10 · Pull-up 3×AMRAP · Walking lunge 3×12/side · Ab wheel 3×10' },
+        { title: 'Cardio + core', focus: 'general health', moves: 'Zone 2 walk 30 min · Hanging leg raise 3×10 · Russian twist 3×20 · Dead bug 3×10/side' }
+      ]
     };
-    const suggestions = sessions[g] || sessions.maintain;
-    const sessionsIdx = ((new Date().getDate()) % 3);
 
-    // Nutrition nudge
-    const nutritionNudge = g === 'gain'
-      ? 'Push protein to ~1.8 g/kg (currently ~' + (last ? Math.round(last.weight * 1.8) : 140) + ' g). If weight stalls 2 weeks, add 150 kcal.'
-      : g === 'lose'
-      ? 'Hold protein at 2.2 g/kg (~' + (last ? Math.round(last.weight * 2.2) : 140) + ' g) to spare muscle. If loss stalls, drop 100 kcal, don\'t crash.'
-      : 'Maintenance calories — protein ~1.6 g/kg. Focus on food quality this month.';
+    // Injury-aware swaps applied to the raw move string
+    const swap = { squat: 'Leg press', deadlift: 'RDL', 'Bulgarian split squat': 'Leg extension', 'Back squat': 'Front squat' };
+    function applySwaps(str) {
+      if (!injuries.length) return str;
+      let out = str;
+      if (injuries.includes('knee')) out = out.replace(/Back squat/g, 'Leg press').replace(/Bulgarian split squat/g, 'Leg extension');
+      if (injuries.includes('low back')) out = out.replace(/Deadlift/g, 'RDL').replace(/Barbell row/g, 'Chest-supp row');
+      if (injuries.includes('shoulder')) out = out.replace(/OHP/g, 'DB shoulder press').replace(/Bench/g, 'Incline DB bench');
+      if (injuries.includes('post-partum core recovery')) {
+        out = out.replace(/Plank/g, 'Dead bug').replace(/Hanging knee raise/g, 'Bird-dog').replace(/Assault bike/g, 'Incline walk');
+      }
+      return out;
+    }
 
-    // Explanation the trainer can paste into a message
-    const context = (() => {
-      const parts = [];
-      if (Math.abs(delta) >= 1) parts.push(`${delta > 0 ? 'up' : 'down'} ${Math.abs(delta).toFixed(1)} kg since ${first.date}`);
-      if (targetLeft != null) parts.push(`${Math.abs(targetLeft).toFixed(1)} kg to ${g === 'gain' ? 'gain' : g === 'lose' ? 'lose' : 'shift'} to hit ${m.targetWeight} kg`);
-      if ((m.progress || []).length >= 5) parts.push('logging consistently');
-      return parts.join(' · ') || 'still building baseline';
-    })();
-    const explanation = `${m.name.split(' ')[0]} is a ${goalTxt} client (${context}). Today's session is a **${suggestions[sessionsIdx].split(' — ')[0]}** — the split rotates through 3 focus days. Nutrition-side: ${nutritionNudge}`;
+    const bank = sessionBank[g] || sessionBank.maintain;
+    const idx = new Date().getDate() % bank.length;
+    const session = bank[idx];
+    const injuredMoves = applySwaps(session.moves);
+    const injuryWarn = injuries.length ? `⚠ Working around ${injuries.join(', ')} — swaps applied.` : null;
+
+    // Deload cue (every 4th week from join date if we have one)
+    const joinDate = m.progress?.[0]?.date;
+    const weeksIn = joinDate ? Math.floor((new Date('2026-06-29') - new Date(joinDate)) / 86400000 / 7) : 0;
+    const isDeload = weeksIn > 0 && weeksIn % 4 === 0;
+
+    // Nutrition — real math this time
+    const w = last ? last.weight : 70;
+    // Protein: Helms — 2.6 g/kg LBM for cut, 1.8 g/kg BW for gain, 1.6 for maintain
+    const protein = g === 'lose' && lbm != null ? Math.round(lbm * 2.6) : g === 'gain' ? Math.round(w * 1.8) : Math.round(w * 1.6);
+    let nutritionNudge;
+    if (g === 'lose') {
+      nutritionNudge = `Protein floor **${protein} g/day** (Helms 2.6 g/kg LBM${lbm ? ` — ${Math.round(lbm)} kg lean` : ''}) — non-negotiable in a cut. ${proj.plateau ? '**Plateau (14d flat)** — drop 100 kcal, add a walk day, hold two weeks.' : paceFast ? '**Too fast (>1 %/wk)** — muscle-burn territory. Add 150 kcal back.' : paceSlow ? 'Trend is slow — small deficit tweak or steps bump.' : 'Pace is clean, hold course.'}`;
+    } else if (g === 'gain') {
+      nutritionNudge = `Protein target **${protein} g/day** (1.8 g/kg BW). ${proj.plateau ? '**Stalled 14d** — add 150 kcal (carbs preferred).' : paceFast ? '**Too fast (>0.5 %/wk)** — fat overshoot risk. Trim 150 kcal.' : 'Pace is clean — carbs around training, sleep ≥ 7 h.'}`;
+    } else {
+      nutritionNudge = `Maintenance day — **${protein} g protein** floor. Focus on food quality + fibre (~14 g / 1000 kcal).`;
+    }
+
+    // Talk-track — projection + BF + LBM woven in
+    const contextParts = [];
+    if (Math.abs(delta) >= 1) contextParts.push(`${delta > 0 ? 'up' : 'down'} ${Math.abs(delta).toFixed(1)} kg since ${first.date}`);
+    if (proj.projDate && !proj.plateau) contextParts.push(`trend projects **${m.targetWeight} kg by ${proj.projDate}**`);
+    if (proj.plateau) contextParts.push(`**14-day plateau**`);
+    if (bf != null) contextParts.push(`~${bf.toFixed(1)} % BF (Navy) · ${Math.round(lbm)} kg lean`);
+    if ((m.progress || []).length >= 5) contextParts.push('logging consistently');
+    const context = contextParts.join(' · ') || 'still building baseline';
+    const explanation = `${m.name.split(' ')[0]} is a ${goalTxt} client (${context}). Today: **${session.title}** — ${session.focus}. ${isDeload ? '**Deload week** (60 % volume, 100 % intensity). ' : ''}Nutrition-side: ${nutritionNudge}`;
+
+    const suggestions = bank.map(s => s.title + ' — ' + s.moves);
+    const sessionsIdx = idx;
+    const localOverrideMoves = injuredMoves;
 
     return `
       <div style="display:flex; align-items:baseline; gap:.6rem; margin-bottom:1rem; flex-wrap:wrap;">
-        <span style="font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; color:var(--cream-4);">Coach agent</span>
-        <span style="font-family:'Instrument Serif'; font-size:1.15rem;">${suggestions[sessionsIdx].split(' — ')[0]}</span>
+        <span style="font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; color:var(--cream-4);">Coach agent · RPE-programmed</span>
+        <span style="font-family:'Instrument Serif'; font-size:1.15rem;">${session.title}${isDeload ? ' · Deload week' : ''}</span>
       </div>
-      <p style="color:var(--cream-2); margin:0 0 1rem; line-height:1.65;">${suggestions[sessionsIdx].split(' — ')[1] || ''}</p>
+      <p style="color:var(--cream-2); margin:0 0 .5rem; line-height:1.65;">${session.focus}</p>
+      <p style="color:var(--cream-2); margin:0 0 1rem; line-height:1.65; font-size:.9rem; padding:.6rem .9rem; background:rgba(0,0,0,.15); border-left:2px solid var(--gold);">${localOverrideMoves.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</p>
+      ${injuryWarn ? `<p style="padding:.5rem .8rem; background:rgba(226,100,90,.08); border-left:2px solid var(--red); color:var(--cream-2); font-size:.85rem; margin:0 0 1rem;">${injuryWarn}</p>` : ''}
       <div style="padding:.85rem 1rem; background:rgba(122,182,226,.06); border-left:2px solid #7ab6e2; margin-bottom:1rem;">
         <div style="font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; color:#7ab6e2; margin-bottom:.35rem;">Nutritionist agent · nudge</div>
-        <div style="color:var(--cream-2); font-size:.9rem; line-height:1.6;">${nutritionNudge}</div>
+        <div style="color:var(--cream-2); font-size:.9rem; line-height:1.6;">${nutritionNudge.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</div>
       </div>
+      ${proj.projDate || proj.plateau || bf != null ? `
+        <div style="padding:.85rem 1rem; background:rgba(122,182,226,.06); border-left:2px solid #7ab6e2; margin-bottom:1rem;">
+          <div style="font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; color:#7ab6e2; margin-bottom:.35rem;">Analyst agent · signals</div>
+          <div style="color:var(--cream-2); font-size:.9rem; line-height:1.6;">
+            ${proj.projDate ? `Linear-regression projection: **${m.targetWeight} kg by ${proj.projDate}** (${Math.abs(proj.perWeek).toFixed(2)} kg/wk trend). ` : ''}
+            ${proj.plateau ? `**Plateau detected** — no significant weight change in 14 days. ` : ''}
+            ${bf != null ? `Body fat (Navy method): **${bf.toFixed(1)} %** · lean mass ${lbm.toFixed(1)} kg.` : ''}
+          </div>
+        </div>` : ''}
       <div style="padding:.85rem 1rem; background:rgba(99,198,109,.06); border-left:2px solid var(--green); margin-bottom:1rem;">
         <div style="font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; color:var(--green); margin-bottom:.35rem;">Talk-track for the session</div>
         <div style="color:var(--cream-2); font-size:.9rem; line-height:1.6;">${explanation.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')}</div>
